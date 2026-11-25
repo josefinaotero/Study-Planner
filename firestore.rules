@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function autenticado() {
+      return request.auth != null;
+    }
+
+    function materiaValida(d) {
+      return d.keys().hasAll(['nombre', 'color', 'codigo', 'miembros', 'examenes'])
+        && d.nombre is string && d.nombre.size() > 0 && d.nombre.size() <= 60
+        && d.color in ['violeta', 'coral', 'ambar', 'verde']
+        && d.codigo is string
+        && d.miembros is list && d.miembros.size() >= 1 && d.miembros.size() <= 10
+        && d.examenes is list && d.examenes.size() <= 30;
+    }
+
+    function metaValida(d) {
+      return d.titulo is string && d.titulo.size() > 0 && d.titulo.size() <= 90
+        && d.hecha is bool;
+    }
+
+    // Materias: solo las leen y modifican quienes figuran en "miembros".
+    match /materias/{materiaId} {
+      allow read: if autenticado() && request.auth.uid in resource.data.miembros;
+      allow create: if autenticado()
+        && request.resource.data.miembros == [request.auth.uid]
+        && materiaValida(request.resource.data);
+      allow update: if autenticado()
+        && request.auth.uid in resource.data.miembros
+        && request.resource.data.miembros == resource.data.miembros
+        && materiaValida(request.resource.data);
+      allow delete: if autenticado() && request.auth.uid in resource.data.miembros;
+    }
+
+    // Metas: cada usuario ve y modifica solo las suyas.
+    match /metas/{metaId} {
+      allow read, delete: if autenticado() && resource.data.uid == request.auth.uid;
+      allow create: if autenticado()
+        && request.resource.data.uid == request.auth.uid
+        && metaValida(request.resource.data);
+      allow update: if autenticado()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && metaValida(request.resource.data);
+    }
+
+    // Sesiones de pomodoro: cada usuario lee y crea solo las suyas.
+    match /sesiones/{sesionId} {
+      allow read: if autenticado() && resource.data.uid == request.auth.uid;
+      allow create: if autenticado()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.minutos is int
+        && request.resource.data.minutos > 0
+        && request.resource.data.minutos <= 180;
+    }
+  }
+}
