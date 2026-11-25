@@ -11,6 +11,7 @@ import NavInferior from './components/NavInferior';
 import Icono from './components/Icono';
 import LoginGoogle from './components/LoginGoogle';
 import Onboarding from './components/Onboarding';
+import { useFirestore } from './hooks/useFirestore';
 import { ESTADOS, aplanar, atrasadosDe, codigoNuevo, colorNuevo } from './utils/plan';
 import { hoyISO } from './utils/fechas';
 import { usePomodoro, mmss, MODOS } from './hooks/usePomodoro';
@@ -32,12 +33,10 @@ function pitido() {
 }
 
 export default function App() {
-  const [usuario, setUsuario] = useState(undefined); // undefined = cargando, null = no logueado
+  const [usuario, setUsuario] = useState(undefined);
   const [onboardingVisto, setOnboardingVisto] = useState(() => {
     try { return localStorage.getItem('onboarding') === 'ok'; } catch { return false; }
   });
-  const [materias, setMaterias] = useState([]);
-  const [metas, setMetas] = useState([]);
   const [sesiones, setSesiones] = useState([]);
   const [vista, setVista] = useState('inicio');
   const [materiaId, setMateriaId] = useState(null);
@@ -50,6 +49,12 @@ export default function App() {
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'oscuro' : 'claro';
   });
 
+  const {
+    materias, metas, cargando,
+    guardarMaterias, eliminarMateria,
+    guardarMetas, eliminarMeta,
+  } = useFirestore(usuario?.uid);
+
   const pomo = usePomodoro((modo) => {
     if (modo === 'enfoque') {
       setSesiones((prev) => [...prev, { id: crypto.randomUUID(), fecha: hoyISO(), materiaId: pomoMateria, minutos: MODOS.enfoque.min }]);
@@ -60,13 +65,8 @@ export default function App() {
     pitido();
   });
 
-  // Escuchar cambios de sesión de Firebase
   useEffect(() => {
-    if (!firebaseListo) {
-      console.info('Firebase sin configurar: completá el archivo .env');
-      setUsuario(null);
-      return;
-    }
+    if (!firebaseListo) { setUsuario(null); return; }
     const dejarDeEscuchar = escucharSesion((u) => setUsuario(u ?? null));
     return dejarDeEscuchar;
   }, []);
@@ -86,7 +86,7 @@ export default function App() {
     return () => clearTimeout(t);
   }, [aviso]);
 
-  // Pantalla de carga mientras Firebase resuelve la sesión
+  // ── Pantallas previas ──────────────────────────────────────────
   if (usuario === undefined) {
     return (
       <div className="app" style={{ display: 'grid', placeItems: 'center', minHeight: '100dvh' }}>
@@ -95,7 +95,6 @@ export default function App() {
     );
   }
 
-  // Si no hay sesión, mostrar pantalla de login
   if (!usuario) {
     return (
       <div className="login-wrapper" data-theme={tema === 'oscuro' ? 'dark' : 'light'}>
@@ -115,6 +114,15 @@ export default function App() {
     );
   }
 
+  if (cargando) {
+    return (
+      <div className="app" style={{ display: 'grid', placeItems: 'center', minHeight: '100dvh' }}>
+        <span style={{ opacity: 0.4, fontSize: '0.9rem' }}>Cargando tus datos…</span>
+      </div>
+    );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────
   const examenes = aplanar(materias);
   const materiaAbierta = materias.find((m) => m.id === materiaId);
   const examenAbierto = examenes.find((e) => e.id === examenId);
@@ -123,87 +131,99 @@ export default function App() {
   const abrirExamen = (id) => { setExamenId(id); setVista('examen'); };
   const nuevoExamen = (nombreMateria = '') => { setPreMateria(nombreMateria); setVista('nuevo'); };
 
+  // ── Acciones sincronizadas con Firestore ───────────────────────
   const agregar = ({ materia, colorCatalogo, tipo, fecha, temas }) => {
     const examen = { id: crypto.randomUUID(), tipo, fecha, creado: hoyISO(), temas };
     const existente = materias.find((m) => m.nombre === materia);
     const id = existente ? existente.id : crypto.randomUUID();
-    setMaterias((prev) =>
-      existente
-        ? prev.map((m) => (m.id === id ? { ...m, examenes: [...m.examenes, examen] } : m))
-        : [...prev, { id, nombre: materia, color: colorCatalogo || colorNuevo(prev.length), codigo: codigoNuevo(), miembros: ['yo'], examenes: [examen] }]
-    );
+    const nuevas = existente
+      ? materias.map((m) => (m.id === id ? { ...m, examenes: [...m.examenes, examen] } : m))
+      : [...materias, { id, nombre: materia, color: colorCatalogo || colorNuevo(materias.length), codigo: codigoNuevo(), miembros: ['yo'], examenes: [examen] }];
+    guardarMaterias(nuevas);
     setAviso('Examen guardado');
     abrirMateria(id);
   };
 
   const cambiarExamen = (mId, eId, fn) =>
-    setMaterias((prev) => prev.map((m) => (m.id !== mId ? m : { ...m, examenes: m.examenes.map((e) => (e.id !== eId ? e : fn(e))) })));
+    materias.map((m) => (m.id !== mId ? m : { ...m, examenes: m.examenes.map((e) => (e.id !== eId ? e : fn(e))) }));
 
-  const avanzar = (mId, eId, tId) =>
-    cambiarExamen(mId, eId, (e) => ({
+  const avanzar = (mId, eId, tId) => {
+    const nuevas = cambiarExamen(mId, eId, (e) => ({
       ...e,
       temas: e.temas.map((t) => (t.id !== tId ? t : { ...t, estado: ESTADOS[(ESTADOS.indexOf(t.estado) + 1) % ESTADOS.length] })),
     }));
+    guardarMaterias(nuevas);
+  };
 
   const guardarNota = (mId, eId, nota) => {
-    cambiarExamen(mId, eId, (e) => {
+    const nuevas = cambiarExamen(mId, eId, (e) => {
       const { nota: _anterior, ...resto } = e;
       return nota === null ? resto : { ...resto, nota };
     });
+    guardarMaterias(nuevas);
     setAviso(nota === null ? 'Nota quitada' : 'Nota guardada');
   };
 
   const reacomodar = (soloExamenId) => {
     const ids = soloExamenId ? new Set([soloExamenId]) : new Set(atrasadosDe(examenes).map((t) => t.examen.id));
-    setMaterias((prev) => prev.map((m) => ({ ...m, examenes: m.examenes.map((e) => (ids.has(e.id) ? { ...e, creado: hoyISO() } : e)) })));
+    const nuevas = materias.map((m) => ({ ...m, examenes: m.examenes.map((e) => (ids.has(e.id) ? { ...e, creado: hoyISO() } : e)) }));
+    guardarMaterias(nuevas);
     setAviso('Plan reacomodado desde hoy');
   };
 
-  const eliminarExamen = (mId, eId) => {
-    setMaterias((prev) => prev.map((m) => (m.id === mId ? { ...m, examenes: m.examenes.filter((e) => e.id !== eId) } : m)));
+  const handleEliminarExamen = (mId, eId) => {
+    const nuevas = materias.map((m) => (m.id === mId ? { ...m, examenes: m.examenes.filter((e) => e.id !== eId) } : m));
+    guardarMaterias(nuevas);
     setAviso('Examen eliminado');
     abrirMateria(mId);
   };
 
   const agregarMeta = ({ titulo, materiaId: mId, fecha }) => {
-    setMetas((prev) => [...prev, { id: crypto.randomUUID(), titulo, materiaId: mId, fecha, hecha: false }]);
+    const nueva = { id: crypto.randomUUID(), titulo, materiaId: mId, fecha, hecha: false };
+    guardarMetas([...metas, nueva]);
     setAviso('Meta agregada');
   };
-  const alternarMeta = (id) => setMetas((prev) => prev.map((g) => (g.id === id ? { ...g, hecha: !g.hecha } : g)));
-  const eliminarMeta = (id) => {
-    setMetas((prev) => prev.filter((g) => g.id !== id));
+
+  const alternarMeta = (id) => {
+    const nuevas = metas.map((g) => (g.id === id ? { ...g, hecha: !g.hecha } : g));
+    guardarMetas(nuevas);
+  };
+
+  const handleEliminarMeta = (id) => {
+    eliminarMeta(id);
     setAviso('Meta eliminada');
   };
 
-  const eliminarMateria = (id) => {
-    setMaterias((prev) => prev.filter((m) => m.id !== id));
-    setMetas((prev) => prev.map((g) => (g.materiaId === id ? { ...g, materiaId: '' } : g)));
+  const handleEliminarMateria = (id) => {
+    eliminarMateria(id);
+    const metasActualizadas = metas.map((g) => (g.materiaId === id ? { ...g, materiaId: '' } : g));
+    guardarMetas(metasActualizadas);
     if (pomoMateria === id) setPomoMateria('');
     setAviso('Materia eliminada');
     setVista('inicio');
   };
-
-  const navActiva = vista === 'materia' || vista === 'examen' ? 'inicio' : vista;
 
   async function handleCerrarSesion() {
     await cerrarSesion();
     setUsuario(null);
   }
 
+  const navActiva = vista === 'materia' || vista === 'examen' ? 'inicio' : vista;
+
   return (
     <div className="app">
       <main className={`vista-${vista}`}>
         {vista === 'inicio' && <Inicio materias={materias} examenes={examenes} metas={metas} usuario={usuario} onCerrarSesion={handleCerrarSesion} onIrMetas={() => setVista('metas')} onAlternarMeta={alternarMeta} onReacomodar={reacomodar} onAbrirMateria={abrirMateria} onAvanzar={avanzar} onNuevo={nuevoExamen} />}
-        {vista === 'metas' && <Metas metas={metas} materias={materias} onAgregar={agregarMeta} onAlternar={alternarMeta} onEliminar={eliminarMeta} />}
+        {vista === 'metas' && <Metas metas={metas} materias={materias} onAgregar={agregarMeta} onAlternar={alternarMeta} onEliminar={handleEliminarMeta} />}
         {vista === 'pomodoro' && <Pomodoro materias={materias} pomo={pomo} materiaId={pomoMateria} onMateria={setPomoMateria} sesiones={sesiones} />}
         {vista === 'notas' && <Notas materias={materias} onAbrirExamen={abrirExamen} />}
         {vista === 'calendario' && <Calendario examenes={examenes} onAbrir={abrirExamen} />}
         {vista === 'nuevo' && <FormExamen key={preMateria} materiaInicial={preMateria} onGuardar={agregar} />}
         {vista === 'materia' && materiaAbierta && (
-          <DetalleMateria materia={materiaAbierta} onVolver={() => setVista('inicio')} onAbrirExamen={abrirExamen} onAgregar={nuevoExamen} onEliminar={eliminarMateria} />
+          <DetalleMateria materia={materiaAbierta} onVolver={() => setVista('inicio')} onAbrirExamen={abrirExamen} onAgregar={nuevoExamen} onEliminar={handleEliminarMateria} />
         )}
         {vista === 'examen' && examenAbierto && (
-          <DetalleExamen examen={examenAbierto} onVolver={() => abrirMateria(examenAbierto.materiaId)} onAvanzar={avanzar} onEliminar={eliminarExamen} onNota={guardarNota} onReacomodar={reacomodar} />
+          <DetalleExamen examen={examenAbierto} onVolver={() => abrirMateria(examenAbierto.materiaId)} onAvanzar={avanzar} onEliminar={handleEliminarExamen} onNota={guardarNota} onReacomodar={reacomodar} />
         )}
       </main>
       <button className="tema-btn" onClick={() => setTema(tema === 'oscuro' ? 'claro' : 'oscuro')} aria-label={tema === 'oscuro' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'} title={tema === 'oscuro' ? 'Modo claro' : 'Modo oscuro'}>
