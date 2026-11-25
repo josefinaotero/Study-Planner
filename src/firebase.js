@@ -1,8 +1,7 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInWithPopup, signOut, GoogleAuthProvider, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
-// Los valores vienen del archivo .env (ver .env.example). Se leen con import.meta.env.
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -10,27 +9,31 @@ const config = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-// Si falta alguna variable, la app sigue funcionando con datos de muestra.
 export const firebaseListo = Object.values(config).every(Boolean);
 
 const app = firebaseListo ? initializeApp(config) : null;
-export const auth = app ? getAuth(app) : null; // identifica a cada visitante
-export const db = app ? getFirestore(app) : null; // Cloud Firestore
+export const auth = app ? getAuth(app) : null;
+export const db = app ? getFirestore(app) : null;
 
-// Devuelve el usuario actual; si no hay sesión, entra como anónimo.
-export function asegurarSesion() {
-  if (!auth) return Promise.reject(new Error('Falta configurar Firebase en el archivo .env'));
-  return new Promise((resolve, reject) => {
-    const dejarDeEscuchar = onAuthStateChanged(auth, (usuario) => {
-      if (usuario) {
-        dejarDeEscuchar();
-        resolve(usuario);
-      } else {
-        signInAnonymously(auth).catch((error) => {
-          dejarDeEscuchar();
-          reject(error);
-        });
-      }
-    });
-  });
+const proveedor = app ? new GoogleAuthProvider() : null;
+
+/** Abre el popup de Google y devuelve el usuario autenticado. */
+export function loginConGoogle() {
+  if (!auth) return Promise.reject(new Error('Firebase no configurado'));
+  return signInWithPopup(auth, proveedor).then((resultado) => resultado.user);
+}
+
+/** Cierra la sesión del usuario actual. */
+export function cerrarSesion() {
+  if (!auth) return Promise.resolve();
+  return signOut(auth);
+}
+
+/**
+ * Escucha cambios en la sesión. Llama a callback con el usuario (o null).
+ * Devuelve la función para dejar de escuchar.
+ */
+export function escucharSesion(callback) {
+  if (!auth) { callback(null); return () => {}; }
+  return onAuthStateChanged(auth, callback);
 }

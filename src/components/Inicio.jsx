@@ -2,15 +2,26 @@ import Icono from './Icono';
 import { COLORES, progresoMateria, proximoExamen, temasDeHoy, atrasadosDe, ETIQUETA } from '../utils/plan';
 import { diasHasta, textoDias } from '../utils/fechas';
 
-export default function Inicio({ materias, examenes, metas, onAbrirMateria, onAvanzar, onNuevo, onIrMetas, onAlternarMeta, onReacomodar }) {
+export default function Inicio({ materias, examenes, metas, usuario, onCerrarSesion, onAbrirMateria, onAvanzar, onNuevo, onIrMetas, onAlternarMeta, onReacomodar }) {
   const hoy = temasDeHoy(examenes);
   const atrasados = atrasadosDe(examenes);
   const pendientes = metas.filter((m) => !m.hecha).sort((a, b) => (a.fecha || '9999').localeCompare(b.fecha || '9999')).slice(0, 3);
+  const nombre = usuario?.displayName?.split(' ')[0] || 'vos';
 
   return (
     <>
       <header className="saludo">
-        <p>Buen día</p>
+        <div className="saludo__top">
+          <p>Buen día, {nombre}</p>
+          {usuario && (
+            <button className="usuario-btn" onClick={onCerrarSesion} title="Cerrar sesión">
+              {usuario.photoURL
+                ? <img src={usuario.photoURL} alt={usuario.displayName || 'Usuario'} className="usuario-avatar" referrerPolicy="no-referrer" />
+                : <span className="usuario-iniciales">{nombre[0].toUpperCase()}</span>
+              }
+            </button>
+          )}
+        </div>
         <h1>Tu plan de estudio</h1>
         <div className="acciones">
           <button className="btn" onClick={() => onNuevo()}><Icono n="mas" tam={18} /> Agregar examen</button>

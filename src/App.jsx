@@ -9,11 +9,12 @@ import DetalleMateria from './components/DetalleMateria';
 import DetalleExamen from './components/DetalleExamen';
 import NavInferior from './components/NavInferior';
 import Icono from './components/Icono';
+import LoginGoogle from './components/LoginGoogle';
+import Onboarding from './components/Onboarding';
 import { ESTADOS, aplanar, atrasadosDe, codigoNuevo, colorNuevo } from './utils/plan';
 import { hoyISO } from './utils/fechas';
 import { usePomodoro, mmss, MODOS } from './hooks/usePomodoro';
-import { asegurarSesion, firebaseListo } from './firebase';
-import * as datos from './db';
+import { escucharSesion, cerrarSesion, firebaseListo } from './firebase';
 
 function pitido() {
   try {
@@ -30,87 +31,45 @@ function pitido() {
   } catch { /* sin audio disponible */ }
 }
 
-function Estado({ titulo, texto }) {
-  return (
-    <div className="vacio" role="status">
-      <strong>{titulo}</strong>
-      {texto && <p>{texto}</p>}
-    </div>
-  );
-}
-
 export default function App() {
-  const [uid, setUid] = useState(null);
+  const [usuario, setUsuario] = useState(undefined); // undefined = cargando, null = no logueado
+  const [onboardingVisto, setOnboardingVisto] = useState(() => {
+    try { return localStorage.getItem('onboarding') === 'ok'; } catch { return false; }
+  });
   const [materias, setMaterias] = useState([]);
   const [metas, setMetas] = useState([]);
   const [sesiones, setSesiones] = useState([]);
-  const [listo, setListo] = useState({ materias: false, metas: false, sesiones: false });
-  const [errorConexion, setErrorConexion] = useState('');
-  const [pendientes, setPendientes] = useState(0);
   const [vista, setVista] = useState('inicio');
   const [materiaId, setMateriaId] = useState(null);
   const [examenId, setExamenId] = useState(null);
   const [preMateria, setPreMateria] = useState('');
   const [pomoMateria, setPomoMateria] = useState('');
-  const [aviso, setAviso] = useState(null);
+  const [aviso, setAviso] = useState('');
   const [tema, setTema] = useState(() => {
     try { const g = localStorage.getItem('tema'); if (g) return g; } catch { /* sin almacenamiento */ }
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'oscuro' : 'claro';
   });
 
-  const mostrar = (texto, tipo = 'ok') => setAviso({ texto, tipo });
-
-  // Ejecuta una operación de Firestore e informa si salió bien o falló.
-  const ejecutar = async (accion, mensajeOk) => {
-    setPendientes((n) => n + 1);
-    try {
-      await accion();
-      if (mensajeOk) mostrar(mensajeOk);
-    } catch (e) {
-      console.error(e);
-      mostrar('No se pudo guardar el cambio. Revisá tu conexión y las reglas de Firestore.', 'error');
-    } finally {
-      setPendientes((n) => n - 1);
-    }
-  };
-
   const pomo = usePomodoro((modo) => {
     if (modo === 'enfoque') {
-      ejecutar(() => datos.crearSesion(uid, { fecha: hoyISO(), materiaId: pomoMateria, minutos: MODOS.enfoque.min }));
-      mostrar('¡Pomodoro completado! Tomate un descanso.');
+      setSesiones((prev) => [...prev, { id: crypto.randomUUID(), fecha: hoyISO(), materiaId: pomoMateria, minutos: MODOS.enfoque.min }]);
+      setAviso('¡Pomodoro completado! Tomate un descanso.');
     } else {
-      mostrar('Terminó el descanso.');
+      setAviso('Terminó el descanso.');
     }
     pitido();
   });
 
-  // Sesión anónima
+  // Escuchar cambios de sesión de Firebase
   useEffect(() => {
-    if (!firebaseListo) return;
-    asegurarSesion()
-      .then((u) => setUid(u.uid))
-      .catch((e) =>
-        setErrorConexion(
-          e.code === 'auth/operation-not-allowed'
-            ? 'Falta habilitar Authentication → Anónimo en la consola de Firebase.'
-            : `No se pudo iniciar sesión (${e.code || e.message}). Revisá el archivo .env.`
-        )
-      );
+    if (!firebaseListo) {
+      console.info('Firebase sin configurar: completá el archivo .env');
+      setUsuario(null);
+      return;
+    }
+    const dejarDeEscuchar = escucharSesion((u) => setUsuario(u ?? null));
+    return dejarDeEscuchar;
   }, []);
-
-  // Datos en tiempo real desde Firestore
-  useEffect(() => {
-    if (!uid) return;
-    const falla = (e) =>
-      setErrorConexion(`No se pudieron leer los datos (${e.code || e.message}). Revisá que las reglas de Firestore estén publicadas.`);
-    const marcar = (k) => setListo((p) => ({ ...p, [k]: true }));
-    const cortar = [
-      datos.escucharMaterias(uid, (l) => { setMaterias(l); marcar('materias'); }, falla),
-      datos.escucharMetas(uid, (l) => { setMetas(l); marcar('metas'); }, falla),
-      datos.escucharSesiones(uid, (l) => { setSesiones(l); marcar('sesiones'); }, falla),
-    ];
-    return () => cortar.forEach((f) => f());
-  }, [uid]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = tema === 'oscuro' ? 'dark' : 'light';
@@ -118,14 +77,43 @@ export default function App() {
   }, [tema]);
 
   useEffect(() => {
-    document.title = pomo.corriendo ? `${mmss(pomo.restante)} · Planificador` : 'Planificador de estudio';
+    document.title = pomo.corriendo ? `${mmss(pomo.restante)} · Study Planner` : 'Study Planner';
   }, [pomo.corriendo, pomo.restante]);
 
   useEffect(() => {
     if (!aviso) return;
-    const t = setTimeout(() => setAviso(null), aviso.tipo === 'error' ? 6000 : 2600);
+    const t = setTimeout(() => setAviso(''), 2600);
     return () => clearTimeout(t);
   }, [aviso]);
+
+  // Pantalla de carga mientras Firebase resuelve la sesión
+  if (usuario === undefined) {
+    return (
+      <div className="app" style={{ display: 'grid', placeItems: 'center', minHeight: '100dvh' }}>
+        <span style={{ opacity: 0.4, fontSize: '0.9rem' }}>Study Planner…</span>
+      </div>
+    );
+  }
+
+  // Si no hay sesión, mostrar pantalla de login
+  if (!usuario) {
+    return (
+      <div className="login-wrapper" data-theme={tema === 'oscuro' ? 'dark' : 'light'}>
+        <LoginGoogle onLogin={setUsuario} />
+      </div>
+    );
+  }
+
+  if (!onboardingVisto) {
+    return (
+      <div className="login-wrapper" data-theme={tema === 'oscuro' ? 'dark' : 'light'}>
+        <Onboarding onTerminar={() => {
+          try { localStorage.setItem('onboarding', 'ok'); } catch { /* sin storage */ }
+          setOnboardingVisto(true);
+        }} />
+      </div>
+    );
+  }
 
   const examenes = aplanar(materias);
   const materiaAbierta = materias.find((m) => m.id === materiaId);
@@ -139,21 +127,17 @@ export default function App() {
     const examen = { id: crypto.randomUUID(), tipo, fecha, creado: hoyISO(), temas };
     const existente = materias.find((m) => m.nombre === materia);
     const id = existente ? existente.id : crypto.randomUUID();
-    ejecutar(
-      () =>
-        existente
-          ? datos.guardarExamenes(id, [...existente.examenes, examen])
-          : datos.crearMateria({ id, nombre: materia, color: colorCatalogo || colorNuevo(materias.length), codigo: codigoNuevo(), miembros: [uid], examenes: [examen] }),
-      'Examen guardado'
+    setMaterias((prev) =>
+      existente
+        ? prev.map((m) => (m.id === id ? { ...m, examenes: [...m.examenes, examen] } : m))
+        : [...prev, { id, nombre: materia, color: colorCatalogo || colorNuevo(prev.length), codigo: codigoNuevo(), miembros: ['yo'], examenes: [examen] }]
     );
+    setAviso('Examen guardado');
     abrirMateria(id);
   };
 
-  const cambiarExamen = (mId, eId, fn, mensajeOk) => {
-    const m = materias.find((x) => x.id === mId);
-    if (!m) return;
-    ejecutar(() => datos.guardarExamenes(mId, m.examenes.map((e) => (e.id === eId ? fn(e) : e))), mensajeOk);
-  };
+  const cambiarExamen = (mId, eId, fn) =>
+    setMaterias((prev) => prev.map((m) => (m.id !== mId ? m : { ...m, examenes: m.examenes.map((e) => (e.id !== eId ? e : fn(e))) })));
 
   const avanzar = (mId, eId, tId) =>
     cambiarExamen(mId, eId, (e) => ({
@@ -161,83 +145,71 @@ export default function App() {
       temas: e.temas.map((t) => (t.id !== tId ? t : { ...t, estado: ESTADOS[(ESTADOS.indexOf(t.estado) + 1) % ESTADOS.length] })),
     }));
 
-  const guardarNota = (mId, eId, nota) =>
-    cambiarExamen(
-      mId,
-      eId,
-      (e) => {
-        const { nota: _anterior, ...resto } = e;
-        return nota === null ? resto : { ...resto, nota };
-      },
-      nota === null ? 'Nota quitada' : 'Nota guardada'
-    );
+  const guardarNota = (mId, eId, nota) => {
+    cambiarExamen(mId, eId, (e) => {
+      const { nota: _anterior, ...resto } = e;
+      return nota === null ? resto : { ...resto, nota };
+    });
+    setAviso(nota === null ? 'Nota quitada' : 'Nota guardada');
+  };
 
-  // Reinicia el plan desde hoy para los exámenes con temas atrasados (o solo para uno).
   const reacomodar = (soloExamenId) => {
     const ids = soloExamenId ? new Set([soloExamenId]) : new Set(atrasadosDe(examenes).map((t) => t.examen.id));
-    const cambios = materias
-      .filter((m) => m.examenes.some((e) => ids.has(e.id)))
-      .map((m) => ({ materiaId: m.id, examenes: m.examenes.map((e) => (ids.has(e.id) ? { ...e, creado: hoyISO() } : e)) }));
-    if (cambios.length) ejecutar(() => datos.reacomodarExamenes(cambios), 'Plan reacomodado desde hoy');
+    setMaterias((prev) => prev.map((m) => ({ ...m, examenes: m.examenes.map((e) => (ids.has(e.id) ? { ...e, creado: hoyISO() } : e)) })));
+    setAviso('Plan reacomodado desde hoy');
   };
 
   const eliminarExamen = (mId, eId) => {
-    const m = materias.find((x) => x.id === mId);
-    if (!m) return;
-    ejecutar(() => datos.guardarExamenes(mId, m.examenes.filter((e) => e.id !== eId)), 'Examen eliminado');
+    setMaterias((prev) => prev.map((m) => (m.id === mId ? { ...m, examenes: m.examenes.filter((e) => e.id !== eId) } : m)));
+    setAviso('Examen eliminado');
     abrirMateria(mId);
   };
 
+  const agregarMeta = ({ titulo, materiaId: mId, fecha }) => {
+    setMetas((prev) => [...prev, { id: crypto.randomUUID(), titulo, materiaId: mId, fecha, hecha: false }]);
+    setAviso('Meta agregada');
+  };
+  const alternarMeta = (id) => setMetas((prev) => prev.map((g) => (g.id === id ? { ...g, hecha: !g.hecha } : g)));
+  const eliminarMeta = (id) => {
+    setMetas((prev) => prev.filter((g) => g.id !== id));
+    setAviso('Meta eliminada');
+  };
+
   const eliminarMateria = (id) => {
-    ejecutar(() => datos.borrarMateria(id, metas.filter((g) => g.materiaId === id)), 'Materia eliminada');
+    setMaterias((prev) => prev.filter((m) => m.id !== id));
+    setMetas((prev) => prev.map((g) => (g.materiaId === id ? { ...g, materiaId: '' } : g)));
     if (pomoMateria === id) setPomoMateria('');
+    setAviso('Materia eliminada');
     setVista('inicio');
   };
 
-  const agregarMeta = ({ titulo, materiaId: mId, fecha }) =>
-    ejecutar(() => datos.crearMeta(uid, { titulo, materiaId: mId, fecha, hecha: false }), 'Meta agregada');
-  const alternarMeta = (id) => {
-    const g = metas.find((x) => x.id === id);
-    if (g) ejecutar(() => datos.actualizarMeta(id, { hecha: !g.hecha }));
-  };
-  const eliminarMeta = (id) => ejecutar(() => datos.borrarMeta(id), 'Meta eliminada');
-
   const navActiva = vista === 'materia' || vista === 'examen' ? 'inicio' : vista;
-  const bloqueo = !firebaseListo ? 'Falta configurar Firebase: completá el archivo .env (ver .env.example) y reiniciá el servidor.' : errorConexion;
-  const cargando = !bloqueo && !(listo.materias && listo.metas && listo.sesiones);
+
+  async function handleCerrarSesion() {
+    await cerrarSesion();
+    setUsuario(null);
+  }
 
   return (
     <div className="app">
       <main className={`vista-${vista}`}>
-        {bloqueo ? (
-          <Estado titulo="No se pudo conectar con Firebase" texto={bloqueo} />
-        ) : cargando ? (
-          <Estado titulo="Cargando tus datos…" />
-        ) : (
-          <>
-            {vista === 'inicio' && <Inicio materias={materias} examenes={examenes} metas={metas} onIrMetas={() => setVista('metas')} onAlternarMeta={alternarMeta} onReacomodar={reacomodar} onAbrirMateria={abrirMateria} onAvanzar={avanzar} onNuevo={nuevoExamen} />}
-            {vista === 'metas' && <Metas metas={metas} materias={materias} onAgregar={agregarMeta} onAlternar={alternarMeta} onEliminar={eliminarMeta} />}
-            {vista === 'pomodoro' && <Pomodoro materias={materias} pomo={pomo} materiaId={pomoMateria} onMateria={setPomoMateria} sesiones={sesiones} />}
-            {vista === 'notas' && <Notas materias={materias} onAbrirExamen={abrirExamen} />}
-            {vista === 'calendario' && <Calendario examenes={examenes} onAbrir={abrirExamen} />}
-            {vista === 'nuevo' && <FormExamen key={preMateria} materiaInicial={preMateria} onGuardar={agregar} />}
-            {vista === 'materia' && materiaAbierta && (
-              <DetalleMateria materia={materiaAbierta} onVolver={() => setVista('inicio')} onAbrirExamen={abrirExamen} onAgregar={nuevoExamen} onEliminar={eliminarMateria} />
-            )}
-            {vista === 'examen' && examenAbierto && (
-              <DetalleExamen examen={examenAbierto} onVolver={() => abrirMateria(examenAbierto.materiaId)} onAvanzar={avanzar} onEliminar={eliminarExamen} onNota={guardarNota} onReacomodar={reacomodar} />
-            )}
-          </>
+        {vista === 'inicio' && <Inicio materias={materias} examenes={examenes} metas={metas} usuario={usuario} onCerrarSesion={handleCerrarSesion} onIrMetas={() => setVista('metas')} onAlternarMeta={alternarMeta} onReacomodar={reacomodar} onAbrirMateria={abrirMateria} onAvanzar={avanzar} onNuevo={nuevoExamen} />}
+        {vista === 'metas' && <Metas metas={metas} materias={materias} onAgregar={agregarMeta} onAlternar={alternarMeta} onEliminar={eliminarMeta} />}
+        {vista === 'pomodoro' && <Pomodoro materias={materias} pomo={pomo} materiaId={pomoMateria} onMateria={setPomoMateria} sesiones={sesiones} />}
+        {vista === 'notas' && <Notas materias={materias} onAbrirExamen={abrirExamen} />}
+        {vista === 'calendario' && <Calendario examenes={examenes} onAbrir={abrirExamen} />}
+        {vista === 'nuevo' && <FormExamen key={preMateria} materiaInicial={preMateria} onGuardar={agregar} />}
+        {vista === 'materia' && materiaAbierta && (
+          <DetalleMateria materia={materiaAbierta} onVolver={() => setVista('inicio')} onAbrirExamen={abrirExamen} onAgregar={nuevoExamen} onEliminar={eliminarMateria} />
+        )}
+        {vista === 'examen' && examenAbierto && (
+          <DetalleExamen examen={examenAbierto} onVolver={() => abrirMateria(examenAbierto.materiaId)} onAvanzar={avanzar} onEliminar={eliminarExamen} onNota={guardarNota} onReacomodar={reacomodar} />
         )}
       </main>
       <button className="tema-btn" onClick={() => setTema(tema === 'oscuro' ? 'claro' : 'oscuro')} aria-label={tema === 'oscuro' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'} title={tema === 'oscuro' ? 'Modo claro' : 'Modo oscuro'}>
         <Icono n={tema === 'oscuro' ? 'sol' : 'luna'} tam={20} />
       </button>
-      {(aviso || pendientes > 0) && (
-        <div className={`toast${aviso && aviso.tipo === 'error' ? ' toast--error' : ''}`} role={aviso && aviso.tipo === 'error' ? 'alert' : 'status'}>
-          {aviso ? aviso.texto : 'Guardando…'}
-        </div>
-      )}
+      {aviso && <div className="toast" role="status">{aviso}</div>}
       <NavInferior vista={navActiva} onCambiar={(v) => (v === 'nuevo' ? nuevoExamen() : setVista(v))} />
     </div>
   );
