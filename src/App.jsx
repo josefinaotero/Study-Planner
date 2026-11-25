@@ -138,7 +138,7 @@ export default function App() {
     const id = existente ? existente.id : crypto.randomUUID();
     const nuevas = existente
       ? materias.map((m) => (m.id === id ? { ...m, examenes: [...m.examenes, examen] } : m))
-      : [...materias, { id, nombre: materia, color: colorCatalogo || colorNuevo(materias.length), codigo: codigoNuevo(), miembros: ['yo'], examenes: [examen] }];
+      : [...materias, { id, nombre: materia, color: colorCatalogo || colorNuevo(materias.length), codigo: codigoNuevo(), miembros: [usuario.uid], examenes: [examen] }];
     guardarMaterias(nuevas);
     setAviso('Examen guardado');
     abrirMateria(id);
